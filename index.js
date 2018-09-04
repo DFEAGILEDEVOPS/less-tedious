@@ -218,7 +218,7 @@ sqlService.query = (sql, params = []) => {
   })
 }
 
- /**
+/**
  * Modify data in the SQL Server Database.
  * @param {string} sql - The INSERT/UPDATE/DELETE statement to execute
  * @param {array} params - Array of parameters for SQL statement
