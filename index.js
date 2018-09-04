@@ -5,8 +5,7 @@ const { Request, TYPES } = require('tedious')
 const winston = require('winston')
 // winston.level = 'debug'
 
-const sqlPoolService = require('./sql.pool.service')
-const dateService = require('../date.service')
+const sqlPoolService = require('./pool')
 const moment = require('moment')
 let cache = {}
 
@@ -33,7 +32,7 @@ const findTediousDataType = (type) => Object.keys(TYPES).find(k => {
 const cacheKey = (table, column) => table.replace('[', '').replace(']', '') + '_' + column
 
 /**
- * Returns a function that extracts the keys from an object joins them together in a sql fragment
+ * Returns a function that extracts the keys from an object and joins them together in a sql fragment
  * @type {Function}
  */
 const extractColumns = R.compose(
@@ -85,13 +84,19 @@ const isMoment = (v) => moment.isMoment(v)
 
 /**
  * Given an object will convert all Moment values to Javascript Date
- * Useful for converting Data during UPDATES and INSERTS
+ * Useful for converting data during UPDATES and INSERTS
+ *
+ *  @param {Moment} momentDate - a moment date
  */
-const convertMomentToJsDate = (m) => {
-  if (!isMoment(m)) {
-    return m
+const convertMomentToJsDate = (momentDate) => {
+  if (!isMoment(momentDate)) {
+    return momentDate
   }
-  const iso = dateService.formatIso8601(m)
+  if (!momentDate.isValid()) {
+    throw new Error(`convertMomentToJsDate: date is invalid: ${momentDate}`)
+  }
+  const iso8601WithMsPrecisionAndTimeZone = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
+  const iso = momentDate.format(iso8601WithMsPrecisionAndTimeZone)
   return new Date(iso)
 }
 
@@ -167,7 +172,7 @@ const sqlService = {}
 // Name of the admin database
 sqlService.adminSchema = '[mtc_admin]'
 
-  /**
+/**
  * Query data from the SQL Server Database
  * @param {string} sql - The SELECT statement to execute
  * @param {array} params - Array of parameters for SQL statement
@@ -437,7 +442,7 @@ sqlService.update = async function (tableName, data) {
  * Helper function useful for constructing parameterised WHERE clauses
  * @param {Array} ary
  * @param {Tedious.TYPE} type
- * @return {Promise<{params: Array, paramIdentifiers: Array}>}
+ * @return {params: Array, paramIdentifiers: Array}
  */
 sqlService.buildParameterList = (ary, type) => {
   const params = []
@@ -446,7 +451,7 @@ sqlService.buildParameterList = (ary, type) => {
     params.push({ name: `p${i}`, type, value: ary[i] })
     paramIdentifiers.push(`@p${i}`)
   }
-  return {params, paramIdentifiers}
+  return { params, paramIdentifiers }
 }
 
 sqlService.modifyWithTransaction = async (sqlStatements, params) => {
@@ -482,4 +487,13 @@ END CATCH
   `
   return sqlService.modify(wrappedSQL, params)
 }
+
+/**
+ * Initialise the sql service and set up the connection pool
+ * @param config
+ */
+sqlService.initialise = function (config) {
+  sqlPoolService.init(config)
+}
+
 module.exports = sqlService
