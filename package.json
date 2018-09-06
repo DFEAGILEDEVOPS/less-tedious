@@ -1,9 +1,12 @@
 {
   "name": "less-tedious",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "helper package for tedious SQL Server module",
   "main": "index.js",
-  "repository": "https://github.com/DFEAGILEDEVOPS/less-tedious",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DFEAGILEDEVOPS/less-tedious"
+  },
   "author": "Guy Harwood, Jon Shipley, George Chatzigiannis",
   "license": "GPL-3.0",
   "dependencies": {
