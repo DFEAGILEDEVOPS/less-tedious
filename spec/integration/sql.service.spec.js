@@ -6,7 +6,7 @@ const R = require('ramda')
 const TYPES = require('tedious').TYPES
 const winston = require('winston')
 
-require('dotenv').config()
+// require('dotenv').config()
 const sql = require('../services/data-access/sql.service')
 const sqlPool = require('../services/data-access/sql.pool.service')
 
