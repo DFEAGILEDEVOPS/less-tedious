@@ -199,6 +199,9 @@ function validateSqlConfig (config) {
 }
 
 sqlService.initPool = async (sqlConfig) => {
+  if (!sqlConfig) {
+    throw new Error('sqlConfig is required')
+  }
   if (pool) {
     logger.warn('The connection pool has already been initialised')
     return
@@ -279,7 +282,7 @@ sqlService.query = async (sql, params = []) => {
   } catch (error) {
     logger.error('sqlService.query(): SQL Query threw an error', error)
     if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
-      logger.alert('sqlService.query(): An SQL request was attempted but the connection is closed', error)
+      logger.error('sqlService.query(): An SQL request was attempted but the connection is closed', error)
     }
     try {
       logger.error('sqlService.query(): SQL RETRY', error)
@@ -287,7 +290,7 @@ sqlService.query = async (sql, params = []) => {
       addParamsToRequestSimple(params, retryRequest)
       result = await retryRequest.query(sql)
     } catch (error2) {
-      logger.alert('sqlService.query(): SQL RETRY FAILED', error2)
+      logger.error('sqlService.query(): SQL RETRY FAILED', error2)
       throw error2
     }
   }
@@ -352,7 +355,7 @@ sqlService.modify = async (sql, params = []) => {
   } catch (error) {
     logger.error('sqlService.modify(): SQL Query threw an error', error)
     if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
-      logger.alert('sqlService.modify(): An SQL request was attempted but the connection is closed', error)
+      logger.error('sqlService.modify(): An SQL request was attempted but the connection is closed', error)
     }
     try {
       logger.error('sqlService.modify(): attempting SQL retry', error)
@@ -362,7 +365,7 @@ sqlService.modify = async (sql, params = []) => {
       logger.error('sqlService.modify(): SQL retry success', error)
       logger.debug('sql.service: modify: result:', rawResponse)
     } catch (error2) {
-      logger.alert('sqlService.modify(): SQL RETRY FAILED', error2)
+      logger.error('sqlService.modify(): SQL RETRY FAILED', error2)
       throw error2
     }
   }
@@ -593,7 +596,7 @@ sqlService.update = async function (tableName, data) {
 /**
  * Helper function useful for constructing parameterised WHERE clauses
  * @param {Array} ary
- * @param {Tedious.TYPE} type
+ * @param {sqlService.TYPE} type
  * @return {Promise<{params: Array, paramIdentifiers: Array}>}
  */
 sqlService.buildParameterList = (ary, type) => {

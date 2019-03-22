@@ -3,16 +3,16 @@
 
 const moment = require('moment')
 const R = require('ramda')
-const TYPES = require('tedious').TYPES
 const winston = require('winston')
 
-// require('dotenv').config()
-const sql = require('../services/data-access/sql.service')
-const sqlPool = require('../services/data-access/sql.pool.service')
+const sqlConfig = require('../../example-config')
+const sql = require('../../index')
+const TYPES = sql.TYPES
 
 describe('sql.service:integration', () => {
   beforeAll(async () => {
-    sqlPool.init()
+    console.dir(sqlConfig)
+    await sql.initPool(sqlConfig)
     await sql.updateDataTypeCache()
   })
 
@@ -226,7 +226,7 @@ describe('sql.service:integration', () => {
          INSERT into ${table} (tDecimal) 
          VALUES (@tDecimal);
          SELECT @@IDENTITY;`,
-        params)
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -263,7 +263,7 @@ describe('sql.service:integration', () => {
          INSERT into ${table} (tNumeric) 
          VALUES (@tNumeric);
          SELECT @@IDENTITY;`,
-        params)
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -298,7 +298,7 @@ describe('sql.service:integration', () => {
          INSERT into ${table} (tFloat) 
          VALUES (@tFloat);
          SELECT @@IDENTITY;`,
-        params)
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -333,7 +333,7 @@ describe('sql.service:integration', () => {
          INSERT into ${table} (tNvarchar) 
          VALUES (@tNvarchar);
          SELECT @@IDENTITY;`,
-        params)
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
