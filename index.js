@@ -393,7 +393,7 @@ sqlService.modify = async (sql, params = []) => {
  * @param {number} id
  * @return {Promise<void>}
  */
-sqlService.findOneById = async (table, id) => {
+sqlService.findOneById = async (table, id, schema = '[mtc_admin]') => {
   const paramId = {
     name: 'id',
     type: sqlService.TYPES.Int,
@@ -401,7 +401,7 @@ sqlService.findOneById = async (table, id) => {
   }
   const sql = `
       SELECT *    
-      FROM ${sqlService.adminSchema}.${table}
+      FROM ${schema}.${table}
       WHERE id = @id
     `
   const rows = await sqlService.query(sql, [paramId])
@@ -438,11 +438,11 @@ sqlService.getCacheEntryForColumn = async function (table, column) {
  * @param {object} data
  * @return {{sql: string, params}}
  */
-sqlService.generateInsertStatement = async (table, data) => {
+sqlService.generateInsertStatement = async (table, data, schema = '[mtc_admin]') => {
   const params = await generateParams(table, data)
   logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
   const sql = `
-  INSERT INTO ${sqlService.adminSchema}.${table} ( ${extractColumns(data)} ) VALUES ( ${createParamIdentifiers(data)} );
+  INSERT INTO ${schema}.${table} ( ${extractColumns(data)} ) VALUES ( ${createParamIdentifiers(data)} );
   SELECT SCOPE_IDENTITY() AS [SCOPE_IDENTITY]`
   return {
     sql,
@@ -457,7 +457,7 @@ sqlService.generateInsertStatement = async (table, data) => {
  * @param {array} data
  * @return {{sql: string, params}}
  */
-sqlService.generateMultipleInsertStatements = async (table, data) => {
+sqlService.generateMultipleInsertStatements = async (table, data, schema = '[mtc_admin]') => {
   if (!Array.isArray(data)) throw new Error('Insert data is not an array')
   const paramsWithTypes = await generateParams(table, R.head(data))
   const headers = extractColumns(R.head(data))
@@ -478,7 +478,7 @@ sqlService.generateMultipleInsertStatements = async (table, data) => {
   params = R.flatten(params)
   logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
   const sql = `
-  INSERT INTO ${sqlService.adminSchema}.${table} ( ${headers} ) VALUES ( ${values} );
+  INSERT INTO ${schema}.${table} ( ${headers} ) VALUES ( ${values} );
   SELECT SCOPE_IDENTITY()`
   return {
     sql,
@@ -493,10 +493,10 @@ sqlService.generateMultipleInsertStatements = async (table, data) => {
  * @param data
  * @return {Promise<{sql, params: Array}>}
  */
-sqlService.generateUpdateStatement = async (table, data) => {
+sqlService.generateUpdateStatement = async (table, data, schema = '[mtc_admin]') => {
   const params = await generateParams(table, data)
   const sql = R.join(' ', [
-    `UPDATE ${sqlService.adminSchema}.${table}`,
+    `UPDATE ${schema}.${table}`,
     'SET',
     generateSetStatements(R.omit(['id'], data)),
     'WHERE id=@id'

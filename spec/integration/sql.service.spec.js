@@ -4,6 +4,7 @@
 const moment = require('moment')
 const R = require('ramda')
 const winston = require('winston')
+const uuid = require('uuid/v4')
 
 const sqlConfig = require('../../example-config')
 const sql = require('../../index')
@@ -11,7 +12,6 @@ const TYPES = sql.TYPES
 
 describe('sql.service:integration', () => {
   beforeAll(async () => {
-    console.dir(sqlConfig)
     await sql.initPool(sqlConfig)
     await sql.updateDataTypeCache()
   })
@@ -58,7 +58,7 @@ describe('sql.service:integration', () => {
     expect(row.id).toBeDefined()
     expect(row.id).toBe(1)
     expect(row.loadingTimeLimit).toBeDefined()
-    expect(row.loadingTimeLimit).toBe(2)
+    expect(row.loadingTimeLimit).toBe(3)
     expect(row.questionTimeLimit).toBe(5)
   })
 
@@ -161,8 +161,8 @@ describe('sql.service:integration', () => {
     const row = await sql.findOneById('[user]', 3)
     expect(row).toBeDefined()
     expect(row['id']).toBe(3)
-    expect(row['identifier']).toBe('teacher3')
-    expect(row['school_id']).toBe(4)
+    expect(row['identifier']).toBe('teacher2')
+    expect(row['school_id']).toBe(3)
     expect(row['role_id']).toBe(3)
   })
 
@@ -176,14 +176,13 @@ describe('sql.service:integration', () => {
   describe('#create', () => {
     it('should insert a new row and provide the new insert id', async () => {
       const user = {
-        identifier: 'integration-test',
+        identifier: `integration-test-${uuid()}`,
         school_id: 5,
         role_id: 3
       }
       const res = await sql.create('[user]', user)
       expect(res).toBeDefined()
       expect(res.insertId).toBeDefined()
-      expect(res.rowsModified).toBe(1)
       const retrievedUser = await sql.findOneById('[user]', res.insertId)
       expect(retrievedUser).toBeDefined()
       expect(retrievedUser.identifier).toBe(user.identifier)
@@ -200,9 +199,7 @@ describe('sql.service:integration', () => {
       const update = R.pick(['id', 'pin', 'pinExpiresAt'], school)
       update.pin = pin
       update.pinExpiresAt = expiry.clone()
-      const result = await sql.update('[school]', update)
-      expect(result.rowsModified).toBe(1)
-
+      await sql.update('[school]', update)
       // read the school back and check
       const school2 = await sql.findOneById('[school]', 1)
       expect(school2.pin).toBe(pin)
