@@ -1,13 +1,12 @@
 'use strict'
 
 const R = require('ramda')
-const { Request, TYPES } = require('tedious')
-// const winston = require('winston')
-// winston.level = 'error'
-
-const sqlPoolService = require('./pool')
 const moment = require('moment')
 let cache = {}
+const mssql = require('mssql')
+const logger = require('winston')
+const dateService = require('./date.service')
+let pool
 
 /** Utility functions **/
 
@@ -18,8 +17,11 @@ let cache = {}
  * @param {string} type
  * @return {string | undefined}
  */
-const findTediousDataType = (type) => Object.keys(TYPES).find(k => {
-  if (type.toUpperCase() === k.toUpperCase()) { return k }
+const findDataType = (type) => Object.keys(sqlService.TYPES).find(k => {
+  logger.debug(`findDataType('${type}'): called`)
+  if (type.toUpperCase() === k.toUpperCase()) {
+    return k
+  }
 })
 
 /**
@@ -32,7 +34,7 @@ const findTediousDataType = (type) => Object.keys(TYPES).find(k => {
 const cacheKey = (table, column) => table.replace('[', '').replace(']', '') + '_' + column
 
 /**
- * Returns a function that extracts the keys from an object and joins them together in a sql fragment
+ * Returns a function that extracts the keys from an object joins them together in a sql fragment
  * @type {Function}
  */
 const extractColumns = R.compose(
@@ -48,6 +50,14 @@ const extractColumns = R.compose(
 const paramName = (s) => '@' + s
 
 /**
+ * Prefix a string with '@' and its index
+ * @param idx
+ * @param s
+ * @return {string}
+ */
+const paramNameWithIdx = R.curry((idx, s) => '@' + s + idx)
+
+/**
  * Return a function that takes the keys from an object joins them together into a list
  * of sql parameter identifiers.
  * @type {Function}
@@ -57,6 +67,17 @@ const createParamIdentifiers = R.compose(
   R.map(paramName),
   R.keys
 )
+
+/**
+ * Return a function that takes the keys from each object in an array and joins them
+ * together into a list of sql parameter identifiers with specific IDs.
+ * @type {Function}
+ */
+const createMultipleParamIdentifiers = (data) => data.map((d, idx) => R.compose(
+  R.join(' , '),
+  R.map(paramNameWithIdx(idx)),
+  R.keys
+)(d))
 
 /**
  * Return a string for use in a SQL UPDATE statement
@@ -84,20 +105,25 @@ const isMoment = (v) => moment.isMoment(v)
 
 /**
  * Given an object will convert all Moment values to Javascript Date
- * Useful for converting data during UPDATES and INSERTS
- *
- *  @param {Moment} momentDate - a moment date
+ * Useful for converting Data during UPDATES and INSERTS
  */
-const convertMomentToJsDate = (momentDate) => {
-  if (!isMoment(momentDate)) {
-    return momentDate
+const convertMomentToJsDate = (m) => {
+  if (!isMoment(m)) {
+    return m
   }
-  if (!momentDate.isValid()) {
-    throw new Error(`convertMomentToJsDate: date is invalid: ${momentDate}`)
-  }
-  const iso8601WithMsPrecisionAndTimeZone = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
-  const iso = momentDate.format(iso8601WithMsPrecisionAndTimeZone)
+  const iso = dateService.formatIso8601(m)
   return new Date(iso)
+}
+
+/**
+ * Convert Date to Moment object
+ * Useful for converting Data during UPDATES and INSERTS
+ */
+const convertDateToMoment = (d) => {
+  if (!(d instanceof Date)) {
+    return d
+  }
+  return moment(d)
 }
 
 /**
@@ -120,172 +146,241 @@ async function generateParams (tableName, data) {
     if (cacheData.dataType === 'Decimal' || cacheData.dataType === 'Numeric') {
       options.precision = cacheData.precision
       options.scale = cacheData.scale
+    } else if (cacheData.maxLength) {
+      options.length = cacheData.maxLength
     }
-    // winston.debug(`sql.service: generateParams: options set for [${column}]`, options)
+
+    logger.debug(`sql.service: generateParams: options set for [${column}]`, options)
     params.push({
       name: column,
       value,
-      type: R.prop(findTediousDataType(cacheData.dataType), TYPES),
+      type: R.prop(findDataType(cacheData.dataType), sqlService.TYPES),
       options
     })
   }
   return params
 }
 
-function parseResults (results) {
-  // omit metadata for now, can introduce if useful at later date
-  const jsonArray = []
-  results.forEach(row => {
-    const json = {}
-    // const metadata = []
-    row.forEach(col => {
-      if (col.metadata.colName !== 'version') {
-        if (col.metadata.type.type === 'DATETIMEOFFSETN' && col.value) {
-          json[col.metadata.colName] = moment(col.value)
-        } else {
-          json[col.metadata.colName] = col.value
-        }
-      }
-    })
-    jsonArray.push(json)
-  })
-  return jsonArray
-}
-
-/**
- * Return a boolean to indicate if the SQL provided is an insert statement
- * @param sql
- * @return {boolean}
- */
-function isInsertStatement (sql = '') {
-  const s = sql.replace(/\s/g, '').toUpperCase()
-  if (s.slice(0, 6) !== 'INSERT') {
-    return false
-  }
-  // winston.debug(`sql.service: INSERT statement found: ${sql}`)
-  return true
-}
-
 /** SQL Service **/
-const sqlService = {}
+const sqlService = {
+  // SQL type-mapping adapter.  Add new types as required.
+  TYPES: {
+    BigInt: mssql.BigInt,
+    Bit: mssql.Bit,
+    Char: mssql.Char,
+    DateTimeOffset: mssql.DateTimeOffset,
+    Decimal: mssql.Decimal,
+    Float: mssql.Float,
+    Int: mssql.Int,
+    Numeric: mssql.Numeric,
+    NVarChar: mssql.NVarChar,
+    Real: mssql.Real,
+    SmallInt: mssql.SmallInt,
+    UniqueIdentifier: mssql.UniqueIdentifier
+  }
+}
 
-// Name of the admin database
-sqlService.adminSchema = '[mtc_admin]'
+function validateSqlConfig (config) {
+  const ex = (propertyName) => {
+    throw new Error(`${propertyName} is required`)
+  }
+  if (!config.Application.Username) {
+    ex('Application.Username')
+  }
+  if (!config.Application.Password) {
+    ex('Application.Password')
+  }
+  if (!config.Server) {
+    ex('Server')
+  }
+  if (!config.Database) {
+    ex('Server')
+  }
+}
+
+sqlService.initPool = async (sqlConfig) => {
+  if (pool) {
+    logger.warn('The connection pool has already been initialised')
+    return
+  }
+  validateSqlConfig(sqlConfig)
+  const config = {
+    user: sqlConfig.Application.Username,
+    password: sqlConfig.Application.Password,
+    server: sqlConfig.Server,
+    database: sqlConfig.Database,
+    connectionTimeout: sqlConfig.connectionTimeout || 30000,
+    requestTimeout: sqlConfig.requestTimeout || 15000,
+    pool: {
+      max: sqlConfig.Pooling.MaxCount || 5,
+      min: sqlConfig.Pooling.MinCount || 0,
+      idleTimeoutMillis: sqlConfig.Pooling.IdleTimeout || 30000
+    }
+  }
+  pool = new mssql.ConnectionPool(config)
+  pool.on('error', err => {
+    logger.error('SQL Pool Error:', err)
+  })
+  return pool.connect()
+}
+
+sqlService.drainPool = async () => {
+  await pool
+  if (!pool) {
+    logger.warn('The connection pool is not initialised')
+    return
+  }
+  return pool.close()
+}
 
 /**
- * Query data from the SQL Server Database
+ * Utility service to transform the results before sending to the caller
+ * @type {Function}
+ */
+sqlService.transformResult = function (data) {
+  const recordSet = R.prop('recordset', data) // returns [o1, o2,  ...]
+  if (!recordSet) {
+    return []
+  }
+
+  return R.map(R.pipe(
+    R.omit(['version']),
+    R.map(convertDateToMoment)
+  ), recordSet)
+}
+
+function addParamsToRequestSimple (params, request) {
+  if (params) {
+    for (let index = 0; index < params.length; index++) {
+      const param = params[index]
+      // TODO support other options
+      request.input(param.name, param.type, param.value)
+    }
+  }
+}
+
+/**
+ * Query data from SQL Server via mssql
  * @param {string} sql - The SELECT statement to execute
  * @param {array} params - Array of parameters for SQL statement
  * @return {Promise<*>}
  */
-sqlService.query = (sql, params = []) => {
-  // winston.debug(`sql.service.query(): ${sql}`)
-  // winston.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
-  return new Promise(async (resolve, reject) => {
-    let con
+sqlService.query = async (sql, params = []) => {
+  logger.debug(`sql.service.query(): ${sql}`)
+  logger.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
+  await pool
+
+  const request = new mssql.Request(pool)
+  addParamsToRequestSimple(params, request)
+
+  let result
+  try {
+    result = await request.query(sql)
+  } catch (error) {
+    logger.error('sqlService.query(): SQL Query threw an error', error)
+    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
+      logger.alert('sqlService.query(): An SQL request was attempted but the connection is closed', error)
+    }
     try {
-      con = await sqlPoolService.getConnection()
-    } catch (error) {
-      reject(error)
-      return
+      logger.error('sqlService.query(): SQL RETRY', error)
+      const retryRequest = new mssql.Request(pool)
+      addParamsToRequestSimple(params, retryRequest)
+      result = await retryRequest.query(sql)
+    } catch (error2) {
+      logger.alert('sqlService.query(): SQL RETRY FAILED', error2)
+      throw error2
     }
-    let results = []
-    // http://tediousjs.github.io/tedious/api-request.html
-
-    var request = new Request(sql, function (err, rowCount) {
-      con.release()
-      if (err) {
-        // winston.debug('ERROR SQL: ', sql)
-        return reject(err)
-      }
-      const objects = parseResults(results)
-      // winston.debug('RESULTS', JSON.stringify(objects))
-      resolve(objects)
-    })
-
-    if (params) {
-      for (let index = 0; index < params.length; index++) {
-        const param = params[index]
-        // TODO support other options
-        request.addParameter(param.name, param.type, param.value)
-      }
-    }
-
-    request.on('row', function (cols) {
-      results.push(cols)
-    })
-    con.execSql(request)
-  })
+  }
+  return sqlService.transformResult(result)
 }
 
 /**
- * Modify data in the SQL Server Database.
+ * Add parameters to an SQL request
+ * @param {{name, value, type}[]} params - array of parameter objects
+ * @param {{}} request -  mssql request
+ */
+function addParamsToRequest (params, request) {
+  if (params) {
+    for (let index = 0; index < params.length; index++) {
+      let param = params[index]
+      param.value = convertMomentToJsDate(param.value)
+      if (!param.type) {
+        throw new Error('parameter type invalid')
+      }
+      const options = {}
+      if (R.pathEq(['type', 'name'], 'Decimal', param) ||
+        R.pathEq(['type', 'name'], 'Numeric', param)) {
+        options.precision = param.precision || 28
+        options.scale = param.scale || 5
+      }
+      const opts = param.options ? param.options : options
+      if (opts && Object.keys(opts).length) {
+        logger.debug('sql.service: addParamsToRequest(): opts to addParameter are: ', opts)
+      }
+
+      if (opts.precision) {
+        request.input(param.name, param.type(opts.precision, opts.scale), param.value)
+      } else if (opts.length) {
+        request.input(param.name, param.type(opts.length), param.value)
+      } else {
+        request.input(param.name, param.type, param.value)
+      }
+    }
+  }
+}
+
+/**
+ * Modify data in SQL Server via mssql library.
  * @param {string} sql - The INSERT/UPDATE/DELETE statement to execute
  * @param {array} params - Array of parameters for SQL statement
  * @return {Promise}
  */
-sqlService.modify = (sql, params = []) => {
-  // winston.debug('sql.service.modify(): SQL: ' + sql)
-  // winston.debug('sql.service.modify(): Params ', R.map(R.pick(['name', 'value']), params))
+sqlService.modify = async (sql, params = []) => {
+  logger.debug('sql.service.modify(): SQL: ' + sql)
+  logger.debug('sql.service.modify(): Params ', R.map(R.pick(['name', 'value']), params))
+  await pool
 
-  return new Promise(async (resolve, reject) => {
-    const isInsert = isInsertStatement(sql)
-    const con = await sqlPoolService.getConnection()
-    const response = {}
-    const output = []
-    const request = new Request(sql, function (err, rowCount) {
-      con.release()
-      if (err) {
-        return reject(err)
-      }
-      const res = R.assoc('rowsModified', (isInsert ? rowCount - 1 : rowCount), response)
-      // winston.debug('sql.service: modify: result:', res)
-      return resolve(res)
-    })
+  const request = new mssql.Request(pool)
+  addParamsToRequest(params, request)
+  const returnValue = {}
+  const insertIds = []
+  let rawResponse
 
-    if (params) {
-      for (let index = 0; index < params.length; index++) {
-        let param = params[index]
-        param.value = convertMomentToJsDate(param.value)
-        // TODO add support for other options
-        if (!param.type) {
-          con.release()
-          return reject(new Error('parameter type invalid'))
-        }
-        const options = {}
-        if (R.pathEq(['type', 'name'], 'Decimal', param) ||
-          R.pathEq(['type', 'name'], 'Numeric', param)) {
-          options.precision = param.precision || 28
-          options.scale = param.scale || 5
-        }
-        const opts = param.options ? param.options : options
-        if (opts && Object.keys(opts).length) {
-          // winston.debug('sql.service: modify(): opts to addParameter are: ', opts)
-        }
+  try {
+    rawResponse = await request.query(sql)
+    logger.debug('sql.service.modify(): result:', rawResponse)
+  } catch (error) {
+    logger.error('sqlService.modify(): SQL Query threw an error', error)
+    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
+      logger.alert('sqlService.modify(): An SQL request was attempted but the connection is closed', error)
+    }
+    try {
+      logger.error('sqlService.modify(): attempting SQL retry', error)
+      const retryRequest = new mssql.Request(pool)
+      addParamsToRequest(params, retryRequest)
+      rawResponse = await retryRequest.query(sql)
+      logger.error('sqlService.modify(): SQL retry success', error)
+      logger.debug('sql.service: modify: result:', rawResponse)
+    } catch (error2) {
+      logger.alert('sqlService.modify(): SQL RETRY FAILED', error2)
+      throw error2
+    }
+  }
 
-        request.addParameter(
-          param.name,
-          param.type,
-          param.value,
-          opts
-        )
+  if (rawResponse && rawResponse.recordset) {
+    for (let obj of rawResponse.recordset) {
+      if (obj && obj.SCOPE_IDENTITY) {
+        insertIds.push(obj.SCOPE_IDENTITY)
       }
     }
+  }
 
-    // Pick up any OUTPUT
-    request.on('row', function (cols) {
-      // This output assumes a single column that is the inserted id
-      // You get a scalar if the insert is a single insert,
-      // you get an array of ids if the insert was multiple rows.
-      output.push(cols[0].value)
-      if (output.length === 1) {
-        response.insertId = R.head(output)
-      } else {
-        response.insertId = output
-      }
-    })
-    con.execSql(request)
-  })
+  if (insertIds.length === 1) {
+    returnValue.insertId = R.head(insertIds)
+  } else if (insertIds.length > 1) {
+    returnValue.insertIds = insertIds
+  }
+  return returnValue
 }
 
 /**
@@ -296,7 +391,11 @@ sqlService.modify = (sql, params = []) => {
  * @return {Promise<void>}
  */
 sqlService.findOneById = async (table, id) => {
-  const paramId = { name: 'id', type: TYPES.Int, value: id }
+  const paramId = {
+    name: 'id',
+    type: sqlService.TYPES.Int,
+    value: id
+  }
   const sql = `
       SELECT *    
       FROM ${sqlService.adminSchema}.${table}
@@ -318,31 +417,70 @@ sqlService.getCacheEntryForColumn = async function (table, column) {
   const key = cacheKey(table, column)
   if (R.isEmpty(cache)) {
     // This will cache all data-types once on the first sql request
-    await this.updateDataTypeCache()
+    await sqlService.updateDataTypeCache()
   }
   if (!cache.hasOwnProperty(key)) {
-    // winston.debug(`sql.service: cache miss for ${key}`)
+    logger.debug(`sql.service: cache miss for ${key}`)
     return undefined
   }
   const cacheData = cache[key]
-  // winston.debug(`sql.service: cache hit for ${key}`)
-  // winston.debug('sql.service: cache', cacheData)
+  logger.debug(`sql.service: cache hit for ${key}`)
+  logger.debug('sql.service: cache', cacheData)
   return cacheData
 }
 
 /**
- * Provide the INSERT statement for passing to modify and parameters given a kay/value object
+ * Provide the INSERT statement for passing to modify and parameters given a key/value object
  * @param {string} table
  * @param {object} data
  * @return {{sql: string, params}}
  */
 sqlService.generateInsertStatement = async (table, data) => {
   const params = await generateParams(table, data)
-  // winston.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
+  logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
   const sql = `
   INSERT INTO ${sqlService.adminSchema}.${table} ( ${extractColumns(data)} ) VALUES ( ${createParamIdentifiers(data)} );
+  SELECT SCOPE_IDENTITY() AS [SCOPE_IDENTITY]`
+  return {
+    sql,
+    params,
+    outputParams: { SCOPE_IDENTITY: sqlService.TYPES.Int }
+  }
+}
+
+/**
+ * Provide the INSERT statements for passing to modify and parameters an array
+ * @param {string} table
+ * @param {array} data
+ * @return {{sql: string, params}}
+ */
+sqlService.generateMultipleInsertStatements = async (table, data) => {
+  if (!Array.isArray(data)) throw new Error('Insert data is not an array')
+  const paramsWithTypes = await generateParams(table, R.head(data))
+  const headers = extractColumns(R.head(data))
+  const values = createMultipleParamIdentifiers(data).join('), (')
+  let params = []
+  data.forEach((datum, idx) => {
+    params.push(
+      R.map((key) => {
+        const sameParamWithType = paramsWithTypes.find(({ name }) => name === key)
+        return {
+          ...sameParamWithType,
+          name: `${key}${idx}`,
+          value: (sameParamWithType.type.type === 'DATETIMEOFFSETN' ? moment(datum[key]) : datum[key])
+        }
+      }, R.keys(datum))
+    )
+  })
+  params = R.flatten(params)
+  logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
+  const sql = `
+  INSERT INTO ${sqlService.adminSchema}.${table} ( ${headers} ) VALUES ( ${values} );
   SELECT SCOPE_IDENTITY()`
-  return { sql, params }
+  return {
+    sql,
+    params
+  }
 }
 
 /**
@@ -360,7 +498,10 @@ sqlService.generateUpdateStatement = async (table, data) => {
     generateSetStatements(R.omit(['id'], data)),
     'WHERE id=@id'
   ])
-  return { sql, params }
+  return {
+    sql,
+    params
+  }
 }
 
 /**
@@ -371,12 +512,16 @@ sqlService.generateUpdateStatement = async (table, data) => {
  */
 sqlService.create = async (tableName, data) => {
   const preparedData = convertMomentToJsDate(data)
-  const { sql, params } = await sqlService.generateInsertStatement(tableName, preparedData)
+  const {
+    sql,
+    params,
+    outputParams
+  } = await sqlService.generateInsertStatement(tableName, preparedData)
   try {
-    const res = await sqlService.modify(sql, params)
+    const res = await sqlService.modify(sql, params, outputParams)
     return res
   } catch (error) {
-    // winston.warn('sql.service: Failed to INSERT', error)
+    logger.warn('sql.service: Failed to INSERT', error)
     throw error
   }
 }
@@ -397,7 +542,11 @@ sqlService.updateDataTypeCache = async function () {
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = @schema
     `
-  const paramSchema = { name: 'schema', value: 'mtc_admin', type: TYPES.NVarChar }
+  const paramSchema = {
+    name: 'schema',
+    value: 'mtc_admin',
+    type: sqlService.TYPES.NVarChar
+  }
   // delete any existing cache
   cache = {}
   const rows = await sqlService.query(sql, [paramSchema])
@@ -405,13 +554,13 @@ sqlService.updateDataTypeCache = async function () {
     const key = cacheKey(row.TABLE_NAME, row.COLUMN_NAME)
     // add the datatype to the cache
     cache[key] = {
-      dataType: findTediousDataType(row.DATA_TYPE),
+      dataType: findDataType(row.DATA_TYPE),
       precision: row.NUMERIC_PRECISION,
       scale: row.NUMERIC_SCALE,
-      maxLength: row.CHARACTER_MAX_LENGTH
+      maxLength: row.CHARACTER_MAXIMUM_LENGTH && row.CHARACTER_MAXIMUM_LENGTH > 0 ? row.CHARACTER_MAXIMUM_LENGTH : undefined
     }
   })
-  // winston.debug('sql.service: updateDataTypeCache() complete')
+  logger.debug('sql.service: updateDataTypeCache() complete')
 }
 
 /**
@@ -428,12 +577,15 @@ sqlService.update = async function (tableName, data) {
   }
   // Convert any moment objects to JS Date objects as that's required by Tedious
   const preparedData = convertMomentToJsDate(data)
-  const { sql, params } = await sqlService.generateUpdateStatement(tableName, preparedData)
+  const {
+    sql,
+    params
+  } = await sqlService.generateUpdateStatement(tableName, preparedData)
   try {
     const res = await sqlService.modify(sql, params)
     return res
   } catch (error) {
-    // winston.warn('sql.service: Failed to UPDATE', error)
+    logger.warn('sql.service: Failed to UPDATE', error)
     throw error
   }
 }
@@ -442,16 +594,23 @@ sqlService.update = async function (tableName, data) {
  * Helper function useful for constructing parameterised WHERE clauses
  * @param {Array} ary
  * @param {Tedious.TYPE} type
- * @return {params: Array, paramIdentifiers: Array}
+ * @return {Promise<{params: Array, paramIdentifiers: Array}>}
  */
 sqlService.buildParameterList = (ary, type) => {
   const params = []
   const paramIdentifiers = []
   for (let i = 0; i < ary.length; i++) {
-    params.push({ name: `p${i}`, type, value: ary[i] })
+    params.push({
+      name: `p${i}`,
+      type,
+      value: ary[i]
+    })
     paramIdentifiers.push(`@p${i}`)
   }
-  return { params, paramIdentifiers }
+  return {
+    params,
+    paramIdentifiers
+  }
 }
 
 sqlService.modifyWithTransaction = async (sqlStatements, params) => {
@@ -486,14 +645,6 @@ BEGIN CATCH
 END CATCH
   `
   return sqlService.modify(wrappedSQL, params)
-}
-
-/**
- * Initialise the sql service and set up the connection pool
- * @param config
- */
-sqlService.initialise = function (config) {
-  sqlPoolService.init(config)
 }
 
 module.exports = sqlService
