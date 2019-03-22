@@ -215,14 +215,12 @@ describe('sql.service:integration', () => {
       const params = [{
         name: 'tDecimal',
         value: value,
-        type: TYPES.Decimal,
-        precision: 5,
-        scale: 2
+        type: TYPES.Decimal(5, 2)
       }]
       const insertResult = await sql.modify(`
          INSERT into ${table} (tDecimal) 
          VALUES (@tDecimal);
-         SELECT @@IDENTITY;`,
+         SELECT SCOPE_IDENTITY() as [SCOPE_IDENTITY];`,
       params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
