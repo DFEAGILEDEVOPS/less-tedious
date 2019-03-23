@@ -257,7 +257,7 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tNumeric) 
          VALUES (@tNumeric);
-         SELECT @@IDENTITY;`,
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
       params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
@@ -292,7 +292,7 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tFloat) 
          VALUES (@tFloat);
-         SELECT @@IDENTITY;`,
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
       params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
@@ -327,7 +327,7 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tNvarchar) 
          VALUES (@tNvarchar);
-         SELECT @@IDENTITY;`,
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
       params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
@@ -344,14 +344,21 @@ describe('sql.service:integration', () => {
     })
 
     it('raises an error on CREATE when the nvarchar provided is too long', async () => {
-      const data = { tNvarchar: 'the quick brown fox' } // 19 chars col length is 10
+      /* const param = {
+        name: 'tNvarchar',
+        value: 'the quick brown fox', // 19 chars col length is 10
+        type: TYPES.NVarChar(10)
+      } */
+      const param = {
+        tNvarchar: 'the quick brown fox'
+      }
       // This will generate a warning because of the error, we can shut that up for this test
       spyOn(winston, 'warn')
       try {
-        await sql.create(table, data)
+        await sql.create(table, param)
         fail('expected to throw')
       } catch (error) {
-        expect(error.message).toBe('String or binary data would be truncated.') // vendor message
+        expect(error.message).toBe('The incoming tabular data stream (TDS) remote procedure call (RPC) protocol stream is incorrect. Parameter 3 ("@tNvarchar"): Data type 0xE7 has an invalid data length or metadata length.') // vendor message
       }
     })
   })
