@@ -3,16 +3,16 @@
 
 const moment = require('moment')
 const R = require('ramda')
-const TYPES = require('tedious').TYPES
 const winston = require('winston')
+const uuid = require('uuid/v4')
 
-// require('dotenv').config()
-const sql = require('../services/data-access/sql.service')
-const sqlPool = require('../services/data-access/sql.pool.service')
+const sqlConfig = require('../../example-config')
+const sql = require('../../index')
+const TYPES = sql.TYPES
 
 describe('sql.service:integration', () => {
   beforeAll(async () => {
-    sqlPool.init()
+    await sql.initPool(sqlConfig)
     await sql.updateDataTypeCache()
   })
 
@@ -58,7 +58,7 @@ describe('sql.service:integration', () => {
     expect(row.id).toBeDefined()
     expect(row.id).toBe(1)
     expect(row.loadingTimeLimit).toBeDefined()
-    expect(row.loadingTimeLimit).toBe(2)
+    expect(row.loadingTimeLimit).toBe(3)
     expect(row.questionTimeLimit).toBe(5)
   })
 
@@ -161,8 +161,8 @@ describe('sql.service:integration', () => {
     const row = await sql.findOneById('[user]', 3)
     expect(row).toBeDefined()
     expect(row['id']).toBe(3)
-    expect(row['identifier']).toBe('teacher3')
-    expect(row['school_id']).toBe(4)
+    expect(row['identifier']).toBe('teacher2')
+    expect(row['school_id']).toBe(3)
     expect(row['role_id']).toBe(3)
   })
 
@@ -176,14 +176,13 @@ describe('sql.service:integration', () => {
   describe('#create', () => {
     it('should insert a new row and provide the new insert id', async () => {
       const user = {
-        identifier: 'integration-test',
+        identifier: `integration-test-${uuid()}`,
         school_id: 5,
         role_id: 3
       }
       const res = await sql.create('[user]', user)
       expect(res).toBeDefined()
       expect(res.insertId).toBeDefined()
-      expect(res.rowsModified).toBe(1)
       const retrievedUser = await sql.findOneById('[user]', res.insertId)
       expect(retrievedUser).toBeDefined()
       expect(retrievedUser.identifier).toBe(user.identifier)
@@ -200,9 +199,7 @@ describe('sql.service:integration', () => {
       const update = R.pick(['id', 'pin', 'pinExpiresAt'], school)
       update.pin = pin
       update.pinExpiresAt = expiry.clone()
-      const result = await sql.update('[school]', update)
-      expect(result.rowsModified).toBe(1)
-
+      await sql.update('[school]', update)
       // read the school back and check
       const school2 = await sql.findOneById('[school]', 1)
       expect(school2.pin).toBe(pin)
@@ -218,15 +215,13 @@ describe('sql.service:integration', () => {
       const params = [{
         name: 'tDecimal',
         value: value,
-        type: TYPES.Decimal,
-        precision: 5,
-        scale: 2
+        type: TYPES.Decimal(5, 2)
       }]
       const insertResult = await sql.modify(`
          INSERT into ${table} (tDecimal) 
          VALUES (@tDecimal);
-         SELECT @@IDENTITY;`,
-        params)
+         SELECT SCOPE_IDENTITY() as [SCOPE_IDENTITY];`,
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -262,8 +257,8 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tNumeric) 
          VALUES (@tNumeric);
-         SELECT @@IDENTITY;`,
-        params)
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -297,8 +292,8 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tFloat) 
          VALUES (@tFloat);
-         SELECT @@IDENTITY;`,
-        params)
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -332,8 +327,8 @@ describe('sql.service:integration', () => {
       const insertResult = await sql.modify(`
          INSERT into ${table} (tNvarchar) 
          VALUES (@tNvarchar);
-         SELECT @@IDENTITY;`,
-        params)
+         SELECT @@IDENTITY as [SCOPE_IDENTITY];`,
+      params)
       if (!insertResult.insertId) {
         return fail('insertId expected')
       }
@@ -349,14 +344,21 @@ describe('sql.service:integration', () => {
     })
 
     it('raises an error on CREATE when the nvarchar provided is too long', async () => {
-      const data = { tNvarchar: 'the quick brown fox' } // 19 chars col length is 10
+      /* const param = {
+        name: 'tNvarchar',
+        value: 'the quick brown fox', // 19 chars col length is 10
+        type: TYPES.NVarChar(10)
+      } */
+      const param = {
+        tNvarchar: 'the quick brown fox'
+      }
       // This will generate a warning because of the error, we can shut that up for this test
       spyOn(winston, 'warn')
       try {
-        await sql.create(table, data)
+        await sql.create(table, param)
         fail('expected to throw')
       } catch (error) {
-        expect(error.message).toBe('String or binary data would be truncated.') // vendor message
+        expect(error.message).toBe('The incoming tabular data stream (TDS) remote procedure call (RPC) protocol stream is incorrect. Parameter 3 ("@tNvarchar"): Data type 0xE7 has an invalid data length or metadata length.') // vendor message
       }
     })
   })
