@@ -218,8 +218,12 @@ sqlService.initPool = async (sqlConfig) => {
       max: sqlConfig.Pooling.MaxCount || 5,
       min: sqlConfig.Pooling.MinCount || 0,
       idleTimeoutMillis: sqlConfig.Pooling.IdleTimeout || 30000
+    },
+    options: {
+      encrypt: sqlConfig.Encrypt
     }
   }
+  console.dir(config)
   pool = new mssql.ConnectionPool(config)
   pool.on('error', err => {
     logger.error('SQL Pool Error:', err)
@@ -303,7 +307,8 @@ const queryAttempts = retryConfig.totalAttempts
 
 const dbLimitReached = (error) => {
   // https://docs.microsoft.com/en-us/azure/sql-database/sql-database-develop-error-messages
-  return error.number === 10928
+  return error.number === 10928 ||
+    error.message.indexOf('request limit') !== -1
 }
 
 /**

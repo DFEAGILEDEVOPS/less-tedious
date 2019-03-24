@@ -10,6 +10,8 @@
   "author": "Guy Harwood, Jon Shipley, George Chatzigiannis",
   "license": "GPL-3.0",
   "dependencies": {
+    "dotenv": "^7.0.0",
+    "express": "^4.16.4",
     "moment": "^2.22.2",
     "mssql": "^5.0.3",
     "ramda": "^0.25.0",
@@ -21,6 +23,7 @@
     "standard": "^12.0.1"
   },
   "scripts": {
-    "lint": "standard"
+    "lint": "standard",
+    "http": "node ./http-example.js"
   }
 }
