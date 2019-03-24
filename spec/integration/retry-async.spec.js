@@ -1,7 +1,7 @@
 'use strict'
 /* global describe beforeAll it expect fail xit spyOn */
 
-const retry = require('../../retry')
+const retry = require('../../retry-async')
 const sqlConfig = require('../../example-config')
 const sql = require('../../index')
 
