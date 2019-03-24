@@ -297,11 +297,13 @@ sqlService.query = async (sql, params = []) => {
   return sqlService.transformResult(result)
 }
 
+const retryConfig = require('./retry.config')
 const retry = require('./retry-async')
+const queryAttempts = retryConfig.totalAttempts
 
-const isBusyError = (error) => {
-  // TODO - establish actual error codes
-  return error.code === 'ETIMEOUT'
+const dbLimitReached = (error) => {
+  // https://docs.microsoft.com/en-us/azure/sql-database/sql-database-develop-error-messages
+  return error.number === 10928
 }
 
 /**
@@ -315,28 +317,20 @@ sqlService.queryWithRetry = async (sql, params = []) => {
   logger.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
   await pool
 
-  const request = new mssql.Request(pool)
-  addParamsToRequestSimple(params, request)
-
-  let result
-  try {
-    result = await request.query(sql)
-  } catch (error) {
-    logger.error('sqlService.query(): SQL Query threw an error', error)
-    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
-      logger.error('sqlService.query(): An SQL request was attempted but the connection is closed', error)
-    }
-    try {
-      logger.error('sqlService.query(): SQL RETRY', error)
-      const retryRequest = new mssql.Request(pool)
-      addParamsToRequestSimple(params, retryRequest)
-      result = await retryRequest.query(sql)
-    } catch (error2) {
-      logger.error('sqlService.query(): SQL RETRY FAILED', error2)
-      throw error2
-    }
+  const query = async () => {
+    const request = new mssql.Request(pool)
+    addParamsToRequestSimple(params, request)
+    const result = await request.query(sql)
+    return sqlService.transformResult(result)
   }
-  return sqlService.transformResult(result)
+
+  try {
+    const result = await retry(queryAttempts, query, dbLimitReached)
+    return result
+  } catch (error) {
+    logger.error(`unable to complete query in ${queryAttempts}.\n${error}`)
+    throw error
+  }
 }
 
 /**

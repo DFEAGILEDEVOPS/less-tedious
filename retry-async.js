@@ -1,7 +1,9 @@
 'use strict'
 
-const defaultDelayMs = process.env.RETRY_DEFAULT_WAIT_TIME || 100
-
+const config = require('./retry.config')
+const defaultDelayMs = config.pauseAfterAttemptMs
+// TODO implement exponential delay between attempts
+// const pauseMultiplier = config.pauseMultiplier
 const pause = (duration) => new Promise(res => setTimeout(res, duration))
 const defaultCondition = () => true
 
