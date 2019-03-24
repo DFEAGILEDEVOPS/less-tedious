@@ -297,6 +297,48 @@ sqlService.query = async (sql, params = []) => {
   return sqlService.transformResult(result)
 }
 
+const retry = require('./retry-async')
+
+const isBusyError = (error) => {
+  // TODO - establish actual error codes
+  return error.code === 'ETIMEOUT'
+}
+
+/**
+ * Query data from SQL Server via mssql
+ * @param {string} sql - The SELECT statement to execute
+ * @param {array} params - Array of parameters for SQL statement
+ * @return {Promise<*>}
+ */
+sqlService.queryWithRetry = async (sql, params = []) => {
+  logger.debug(`sql.service.query(): ${sql}`)
+  logger.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
+  await pool
+
+  const request = new mssql.Request(pool)
+  addParamsToRequestSimple(params, request)
+
+  let result
+  try {
+    result = await request.query(sql)
+  } catch (error) {
+    logger.error('sqlService.query(): SQL Query threw an error', error)
+    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
+      logger.error('sqlService.query(): An SQL request was attempted but the connection is closed', error)
+    }
+    try {
+      logger.error('sqlService.query(): SQL RETRY', error)
+      const retryRequest = new mssql.Request(pool)
+      addParamsToRequestSimple(params, retryRequest)
+      result = await retryRequest.query(sql)
+    } catch (error2) {
+      logger.error('sqlService.query(): SQL RETRY FAILED', error2)
+      throw error2
+    }
+  }
+  return sqlService.transformResult(result)
+}
+
 /**
  * Add parameters to an SQL request
  * @param {{name, value, type}[]} params - array of parameter objects
