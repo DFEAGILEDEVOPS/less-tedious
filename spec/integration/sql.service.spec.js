@@ -353,7 +353,6 @@ describe('sql.service:integration', () => {
         tNvarchar: 'the quick brown fox'
       }
       // This will generate a warning because of the error, we can shut that up for this test
-      // spyOn(winston, 'warn')
       try {
         await sql.create(table, param)
         fail('expected to throw')

@@ -28,11 +28,18 @@ const callDatabase = async () => {
 const onlyRetryTimeoutsPredicate = (error) => {
   return error.message.contains('timeout')
 }
+
+const retryPolicy = {
+  attempts: 3,
+  pauseTimeMs: 5000,
+  pauseMultiplier: 1.5
+}
+
 const attemptCount = 3
 try {
-  const data = await retry(attemptCount, callDatabase, onlyRetryTimeoutsPredicate)
+  const data = await retry(callDatabase, retryPolicy, onlyRetryTimeoutsPredicate)
   console.log(`we got some data:${data}`)
 } catch (error) {
-  console.error(`attempted to query database ${attemptCount} times, but all calls were unsuccessful`)
+  console.error(`attempted to query database ${retryPolicy.attempts} times, but all calls were unsuccessful`)
 }
 ```
