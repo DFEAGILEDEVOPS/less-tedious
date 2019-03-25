@@ -260,33 +260,6 @@ function addParamsToRequestSimple (params, request) {
   }
 }
 
-/**
- * Query data from SQL Server via mssql
- * @param {string} sql - The SELECT statement to execute
- * @param {array} params - Array of parameters for SQL statement
- * @return {Promise<*>}
- */
-sqlService.queryV1 = async (sql, params = []) => {
-  await pool
-
-  const request = new mssql.Request(pool)
-  addParamsToRequestSimple(params, request)
-
-  let result
-  try {
-    result = await request.query(sql)
-  } catch (error) {
-    try {
-      const retryRequest = new mssql.Request(pool)
-      addParamsToRequestSimple(params, retryRequest)
-      result = await retryRequest.query(sql)
-    } catch (error2) {
-      throw error2
-    }
-  }
-  return sqlService.transformResult(result)
-}
-
 const retry = require('./retry-async')
 const retryConfig = {
   attempts: 3,
@@ -316,12 +289,7 @@ sqlService.query = async (sql, params = []) => {
     return sqlService.transformResult(result)
   }
 
-  try {
-    const result = await retry(query, retryConfig, dbLimitReached)
-    return result
-  } catch (error) {
-    throw error
-  }
+  return retry(query, retryConfig, dbLimitReached)
 }
 
 /**
@@ -365,26 +333,22 @@ function addParamsToRequest (params, request) {
 sqlService.modify = async (sql, params = []) => {
   await pool
 
-  const request = new mssql.Request(pool)
-  addParamsToRequest(params, request)
+  const modify = async () => {
+    const request = new mssql.Request(pool)
+    addParamsToRequest(params, request)
+    return request.query(sql)
+  }
+
   const returnValue = {}
   const insertIds = []
   let rawResponse
 
-  try {
-    rawResponse = await request.query(sql)
-  } catch (error) {
-    try {
-      const retryRequest = new mssql.Request(pool)
-      addParamsToRequest(params, retryRequest)
-      rawResponse = await retryRequest.query(sql)
-    } catch (error2) {
-      throw error2
-    }
-  }
+  rawResponse = await retry(modify, retryConfig, dbLimitReached)
 
   if (rawResponse && rawResponse.recordset) {
     for (let obj of rawResponse.recordset) {
+      /* TODO remove this strict column name limitation and
+        extract column value regardless of name */
       if (obj && obj.SCOPE_IDENTITY) {
         insertIds.push(obj.SCOPE_IDENTITY)
       }
@@ -417,7 +381,12 @@ sqlService.findOneById = async (table, id, schema = '[mtc_admin]') => {
       FROM ${schema}.${table}
       WHERE id = @id
     `
-  const rows = await sqlService.query(sql, [paramId])
+
+  const query = async () => {
+    return sqlService.query(sql, [paramId])
+  }
+
+  const rows = await retry(query, retryConfig, dbLimitReached)
   return R.head(rows)
 }
 
@@ -528,12 +497,11 @@ sqlService.create = async (tableName, data) => {
     params,
     outputParams
   } = await sqlService.generateInsertStatement(tableName, preparedData)
-  try {
-    const res = await sqlService.modify(sql, params, outputParams)
-    return res
-  } catch (error) {
-    throw error
+
+  const create = async () => {
+    return sqlService.modify(sql, params, outputParams)
   }
+  return retry(create, retryConfig, dbLimitReached)
 }
 
 /**
@@ -590,12 +558,12 @@ sqlService.update = async function (tableName, data) {
     sql,
     params
   } = await sqlService.generateUpdateStatement(tableName, preparedData)
-  try {
-    const res = await sqlService.modify(sql, params)
-    return res
-  } catch (error) {
-    throw error
+
+  const update = async () => {
+    return sqlService.modify(sql, params)
   }
+
+  return retry(update, retryConfig, dbLimitReached)
 }
 
 /**
@@ -652,7 +620,8 @@ BEGIN CATCH
                );
 END CATCH
   `
-  return sqlService.modify(wrappedSQL, params)
+  const modify = async () => sqlService.modify(wrappedSQL, params)
+  return retry(modify, retryConfig, dbLimitReached)
 }
 
 module.exports = sqlService
