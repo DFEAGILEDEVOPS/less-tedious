@@ -624,4 +624,12 @@ END CATCH
   return retry(modify, retryConfig, dbLimitReached)
 }
 
+/**
+ * Initialise the sql service and set up the connection pool
+ * @param config
+ */
+sqlService.initialise = async (config) => {
+  await sqlService.initPool(config)
+}
+
 module.exports = sqlService

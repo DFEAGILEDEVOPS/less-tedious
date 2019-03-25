@@ -12,3 +12,7 @@
 
 * implement mssql connection pooling
 * implement retry policy for sql server 'too many connections' errors
+
+# 2.0.1
+
+* re-introduce sqlService.initialise() to minimise client disruption
