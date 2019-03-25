@@ -3,7 +3,6 @@
 
 const moment = require('moment')
 const R = require('ramda')
-const winston = require('winston')
 const uuid = require('uuid/v4')
 
 const sqlConfig = require('../../example-config')
@@ -59,6 +58,7 @@ describe('sql.service:integration', () => {
     expect(row.id).toBe(1)
     expect(row.loadingTimeLimit).toBeDefined()
     expect(row.loadingTimeLimit).toBe(3)
+    expect(row.questionTimeLimit).toBeDefined()
     expect(row.questionTimeLimit).toBe(5)
   })
 
@@ -353,7 +353,6 @@ describe('sql.service:integration', () => {
         tNvarchar: 'the quick brown fox'
       }
       // This will generate a warning because of the error, we can shut that up for this test
-      spyOn(winston, 'warn')
       try {
         await sql.create(table, param)
         fail('expected to throw')

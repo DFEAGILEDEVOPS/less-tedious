@@ -1,4 +1,6 @@
 'use strict'
+
+require('dotenv').config()
 const oneMinuteInMilliseconds = 60000
 
 module.exports = {
