@@ -11,7 +11,7 @@ const TYPES = sql.TYPES
 
 describe('sql.service:integration', () => {
   beforeAll(async () => {
-    await sql.initPool(sqlConfig)
+    await sql.initialise(sqlConfig)
     await sql.updateDataTypeCache()
   })
 
