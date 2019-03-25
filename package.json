@@ -15,8 +15,7 @@
     "moment": "^2.22.2",
     "mssql": "^5.0.3",
     "ramda": "^0.25.0",
-    "uuid": "^3.3.2",
-    "winston": "^3.0.0"
+    "uuid": "^3.3.2"
   },
   "devDependencies": {
     "jasmine-console-reporter": "^3.0.0",

@@ -4,16 +4,15 @@ require('dotenv').config()
 const express = require('express')
 const sqlService = require('./index')
 const sqlConfig = require('./example-config')
-// console.dir(sqlConfig)
+
 sqlService.initPool(sqlConfig)
 
 const app = express()
 const port = 3000
 
 const callDatabase = async (res) => {
-  const sql = 'SELECT TOP 100 * FROM [mtc_admin].[pupil]'
-  const data = await sqlService.queryWithRetry(sql)
-  console.log(`${data.length} records received`)
+  const sql = 'SELECT TOP 1 * FROM [mtc_admin].[settings]'
+  await sqlService.queryWithRetry(sql)
   res.sendStatus(200)
 }
 

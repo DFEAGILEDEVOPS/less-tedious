@@ -4,7 +4,6 @@ const R = require('ramda')
 const moment = require('moment')
 let cache = {}
 const mssql = require('mssql')
-const logger = require('winston')
 const dateService = require('./date.service')
 let pool
 
@@ -18,7 +17,6 @@ let pool
  * @return {string | undefined}
  */
 const findDataType = (type) => Object.keys(sqlService.TYPES).find(k => {
-  logger.debug(`findDataType('${type}'): called`)
   if (type.toUpperCase() === k.toUpperCase()) {
     return k
   }
@@ -150,7 +148,6 @@ async function generateParams (tableName, data) {
       options.length = cacheData.maxLength
     }
 
-    logger.debug(`sql.service: generateParams: options set for [${column}]`, options)
     params.push({
       name: column,
       value,
@@ -203,7 +200,6 @@ sqlService.initPool = async (sqlConfig) => {
     throw new Error('sqlConfig is required')
   }
   if (pool) {
-    logger.warn('The connection pool has already been initialised')
     return
   }
   validateSqlConfig(sqlConfig)
@@ -223,18 +219,16 @@ sqlService.initPool = async (sqlConfig) => {
       encrypt: sqlConfig.Encrypt
     }
   }
-  console.dir(config)
+
   pool = new mssql.ConnectionPool(config)
-  pool.on('error', err => {
-    logger.error('SQL Pool Error:', err)
-  })
+  // TODO emit error
+  pool.on('error', () => {})
   return pool.connect()
 }
 
 sqlService.drainPool = async () => {
   await pool
   if (!pool) {
-    logger.warn('The connection pool is not initialised')
     return
   }
   return pool.close()
@@ -272,9 +266,7 @@ function addParamsToRequestSimple (params, request) {
  * @param {array} params - Array of parameters for SQL statement
  * @return {Promise<*>}
  */
-sqlService.query = async (sql, params = []) => {
-  logger.debug(`sql.service.query(): ${sql}`)
-  logger.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
+sqlService.queryV1 = async (sql, params = []) => {
   await pool
 
   const request = new mssql.Request(pool)
@@ -284,31 +276,28 @@ sqlService.query = async (sql, params = []) => {
   try {
     result = await request.query(sql)
   } catch (error) {
-    logger.error('sqlService.query(): SQL Query threw an error', error)
-    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
-      logger.error('sqlService.query(): An SQL request was attempted but the connection is closed', error)
-    }
     try {
-      logger.error('sqlService.query(): SQL RETRY', error)
       const retryRequest = new mssql.Request(pool)
       addParamsToRequestSimple(params, retryRequest)
       result = await retryRequest.query(sql)
     } catch (error2) {
-      logger.error('sqlService.query(): SQL RETRY FAILED', error2)
       throw error2
     }
   }
   return sqlService.transformResult(result)
 }
 
-const retryConfig = require('./retry.config')
 const retry = require('./retry-async')
-const queryAttempts = retryConfig.totalAttempts
+const retryConfig = {
+  attempts: 3,
+  pauseTimeMs: 5000,
+  pauseMultiplier: 1.5
+}
+const connectionLimitReachedErrorCode = 10928
 
 const dbLimitReached = (error) => {
   // https://docs.microsoft.com/en-us/azure/sql-database/sql-database-develop-error-messages
-  return error.number === 10928 ||
-    error.message.indexOf('request limit') !== -1
+  return error.number === connectionLimitReachedErrorCode // || error.message.indexOf('request limit') !== -1
 }
 
 /**
@@ -317,9 +306,7 @@ const dbLimitReached = (error) => {
  * @param {array} params - Array of parameters for SQL statement
  * @return {Promise<*>}
  */
-sqlService.queryWithRetry = async (sql, params = []) => {
-  logger.debug(`sql.service.query(): ${sql}`)
-  logger.debug('sql.service.query(): Params ', R.map(R.pick(['name', 'value']), params))
+sqlService.query = async (sql, params = []) => {
   await pool
 
   const query = async () => {
@@ -330,10 +317,9 @@ sqlService.queryWithRetry = async (sql, params = []) => {
   }
 
   try {
-    const result = await retry(queryAttempts, query, dbLimitReached)
+    const result = await retry(query, retryConfig, dbLimitReached)
     return result
   } catch (error) {
-    logger.error(`unable to complete query in ${queryAttempts}.\n${error}`)
     throw error
   }
 }
@@ -358,9 +344,6 @@ function addParamsToRequest (params, request) {
         options.scale = param.scale || 5
       }
       const opts = param.options ? param.options : options
-      if (opts && Object.keys(opts).length) {
-        logger.debug('sql.service: addParamsToRequest(): opts to addParameter are: ', opts)
-      }
 
       if (opts.precision) {
         request.input(param.name, param.type(opts.precision, opts.scale), param.value)
@@ -380,8 +363,6 @@ function addParamsToRequest (params, request) {
  * @return {Promise}
  */
 sqlService.modify = async (sql, params = []) => {
-  logger.debug('sql.service.modify(): SQL: ' + sql)
-  logger.debug('sql.service.modify(): Params ', R.map(R.pick(['name', 'value']), params))
   await pool
 
   const request = new mssql.Request(pool)
@@ -392,21 +373,12 @@ sqlService.modify = async (sql, params = []) => {
 
   try {
     rawResponse = await request.query(sql)
-    logger.debug('sql.service.modify(): result:', rawResponse)
   } catch (error) {
-    logger.error('sqlService.modify(): SQL Query threw an error', error)
-    if (error.code && (error.code === 'ECONNCLOSED' || error.code === 'ESOCKET')) {
-      logger.error('sqlService.modify(): An SQL request was attempted but the connection is closed', error)
-    }
     try {
-      logger.error('sqlService.modify(): attempting SQL retry', error)
       const retryRequest = new mssql.Request(pool)
       addParamsToRequest(params, retryRequest)
       rawResponse = await retryRequest.query(sql)
-      logger.error('sqlService.modify(): SQL retry success', error)
-      logger.debug('sql.service: modify: result:', rawResponse)
     } catch (error2) {
-      logger.error('sqlService.modify(): SQL RETRY FAILED', error2)
       throw error2
     }
   }
@@ -464,12 +436,9 @@ sqlService.getCacheEntryForColumn = async function (table, column) {
     await sqlService.updateDataTypeCache()
   }
   if (!cache.hasOwnProperty(key)) {
-    logger.debug(`sql.service: cache miss for ${key}`)
     return undefined
   }
   const cacheData = cache[key]
-  logger.debug(`sql.service: cache hit for ${key}`)
-  logger.debug('sql.service: cache', cacheData)
   return cacheData
 }
 
@@ -481,7 +450,6 @@ sqlService.getCacheEntryForColumn = async function (table, column) {
  */
 sqlService.generateInsertStatement = async (table, data, schema = '[mtc_admin]') => {
   const params = await generateParams(table, data)
-  logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
   const sql = `
   INSERT INTO ${schema}.${table} ( ${extractColumns(data)} ) VALUES ( ${createParamIdentifiers(data)} );
   SELECT SCOPE_IDENTITY() AS [SCOPE_IDENTITY]`
@@ -517,7 +485,6 @@ sqlService.generateMultipleInsertStatements = async (table, data, schema = '[mtc
     )
   })
   params = R.flatten(params)
-  logger.debug('sql.service: Params ', R.compose(R.map(R.pick(['name', 'value'])))(params))
   const sql = `
   INSERT INTO ${schema}.${table} ( ${headers} ) VALUES ( ${values} );
   SELECT SCOPE_IDENTITY()`
@@ -565,7 +532,6 @@ sqlService.create = async (tableName, data) => {
     const res = await sqlService.modify(sql, params, outputParams)
     return res
   } catch (error) {
-    logger.warn('sql.service: Failed to INSERT', error)
     throw error
   }
 }
@@ -604,7 +570,6 @@ sqlService.updateDataTypeCache = async function () {
       maxLength: row.CHARACTER_MAXIMUM_LENGTH && row.CHARACTER_MAXIMUM_LENGTH > 0 ? row.CHARACTER_MAXIMUM_LENGTH : undefined
     }
   })
-  logger.debug('sql.service: updateDataTypeCache() complete')
 }
 
 /**
@@ -629,7 +594,6 @@ sqlService.update = async function (tableName, data) {
     const res = await sqlService.modify(sql, params)
     return res
   } catch (error) {
-    logger.warn('sql.service: Failed to UPDATE', error)
     throw error
   }
 }
