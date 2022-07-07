@@ -12,7 +12,7 @@
   "dependencies": {
     "dotenv": "^7.0.0",
     "express": "^4.16.4",
-    "moment": "^2.22.2",
+    "moment": "^2.29.4",
     "mssql": "^5.0.3",
     "ramda": "^0.25.0",
     "uuid": "^3.3.2"
