@@ -11,7 +11,7 @@
   "license": "GPL-3.0",
   "dependencies": {
     "dotenv": "^7.0.0",
-    "express": "^4.16.4",
+    "express": "^4.17.3",
     "moment": "^2.22.2",
     "mssql": "^5.0.3",
     "ramda": "^0.25.0",
